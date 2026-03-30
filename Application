@@ -1,0 +1,232 @@
+--I will be creating local variables before they get used for your better reading, as the variable asign is not relevant
+ 
+	local DTS = game:GetService("DataStoreService")
+	local OrderedDTS = DTS:GetOrderedDataStore("TopSurvivals")
+	local Players = game:GetService("Players")
+	local MainDB = DTS:GetDataStore("MainDB")
+	local DefaultDataTable = {
+		Survivals = 0,
+		Cash = 0,
+ 
+	} --Default Data table so users start with data & not nil
+	local SessionData = {} -- We load the Data here, so if Data are in module, I can simply do requiredmodule.SessionData to access data from other server scripts without needing for new functions just for one change that happens rarely
+	local function CharSpawn(player)
+		local Char = player.Character or player.CharacterAdded:Wait()
+		local UI = game.ReplicatedStorage.BillboardGui:Clone()
+		UI.Parent = Char.Head
+		UI.TextLabel.Text = "Survivals: "..SessionData[player.UserId].Survivals
+	end
+ 
+	local function Load(player)
+		player.CharacterAdded:Wait() -- Just to make sure, I usually create loading screens that end when data loaded
+		local success, err = pcall(function()
+			local Data = MainDB:GetAsync(player.UserId)
+			if Data == nil then
+				Data = table.clone(DefaultDataTable) -- clone table instead of data, if no data found
+			end
+			SessionData[player.UserId] = Data
+		end)
+		if not success then -- if any issue is found, we kick the player away
+			warn("Error loading data for player "..player.Name..": "..err)
+			player:Kick()
+		end
+		CharSpawn(player)
+	player.CharacterAdded:Connect(function()
+			CharSpawn(player)
+			player:SetAttribute("State","Lobby")
+		end)
+		game.ReplicatedStorage.UpdataData:FireClient(player,SessionData[player.UserId]) -- We send the data to client, so client UI is loaded
+	end
+ 
+	local function Save(player)
+		local PlrData = SessionData[player.UserId]
+		if PlrData then
+			local success, err = pcall(function()
+				MainDB:SetAsync(player.UserId, PlrData)
+			end)
+			if not success then
+				warn("Error saving data for player "..player.Name..": "..err .. " PlayerData: S"
+					.. tostring(PlrData.Survivals) .."C" .. tostring(PlrData.Cash)) -- if datastore issue, we create warning we can see in game analytics, with data player had. So I can restore them manually :)
+			end
+		end
+		SessionData[player.UserId] = nil
+	end
+ 
+	Players.PlayerAdded:Connect(Load)
+	Players.PlayerRemoving:Connect(Save)
+	game:BindToClose(function()
+		task.wait(1) -- Delay the check, if last player leaves the game, data are saved twice at the same time, this can create issues or Data queue fill
+		for _, player in pairs(Players:GetPlayers()) do
+			Save(player)
+		end
+	end)	
+ 
+	local PartFolder = game.Workspace.Folder
+	local Part = game.ReplicatedStorage.Part
+	local SpawnPart = game.Workspace.Start
+	local State = game.ReplicatedStorage.State -- We use this value to share game state, we could use RemoteEvents, but using this way, we do not need to check if player joins after state change to load the current state
+	local function GetPlayingPlayers() -- function to check alive players in the game
+		local PlayingPlayers = {}
+		for _, player in pairs(Players:GetPlayers()) do
+			if player:GetAttribute("State") == "Game" then
+				table.insert(PlayingPlayers, player) 
+			end
+		end
+		return PlayingPlayers
+	end
+ 
+	local function GenerateMap()
+		PartFolder:ClearAllChildren()
+		task.wait()
+		local Offset = math.random(1,100) > 45
+		local Result = {}
+		local RandomSizeXZ = math.random(10, 20)
+		local RandomPartSize = math.random(5,20)
+		for i = 1, RandomSizeXZ do
+			for j = 1, RandomSizeXZ do
+				local NewPart = Part:Clone()
+			if Offset then
+				NewPart.Size = Vector3.new(RandomPartSize - 2, 1, RandomPartSize - 2)
+			else
+				NewPart.Size = Vector3.new(RandomPartSize, 1, RandomPartSize)
+			end
+ 
+				NewPart.Color = Color3.fromRGB(math.random(1,255),math.random(1,255),math.random(1,255))
+ 
+				NewPart.Position = SpawnPart.Position + Vector3.new(i * RandomPartSize, 0, j * RandomPartSize)
+				NewPart.Parent = PartFolder
+				table.insert(Result, NewPart)
+			end
+		end
+		return Result
+	end
+ 
+	local TweenService = game:GetService("TweenService") 
+	local Rock = game.ReplicatedStorage.Meteor
+	local function CrashAtPos(Pos)
+		local NewMeteor = Rock:Clone()
+		local SpawnPosition = Pos  -- We get the target position & create randomized position in XZ, Y + 100
+			+ Vector3.new(Pos.X + math.random(-50,50),Pos.Y + 100,Pos.Z + math.random(-50,50))
+		local Tween = TweenService:Create(NewMeteor, TweenInfo.new(math.random(2,7), Enum.EasingStyle.Linear, Enum.EasingDirection.Out, 0, false, 0), {Position = Pos})
+		NewMeteor.Position = SpawnPosition
+		NewMeteor.Parent = workspace.Temp
+		Tween:Play()
+		Tween.Completed:Wait() -- wait, delay function
+		NewMeteor:Destroy()
+		local Explosion = Instance.new("Explosion")
+		Explosion.Position = Pos
+		Explosion.BlastRadius = 100
+		Explosion.BlastPressure = 0
+		Explosion.Parent = workspace
+	end
+ 
+	local Effects = { {
+			Action = function()
+				workspace.Gravity = 50
+			end,
+			Revert = function()
+			workspace.Gravity = 196.2
+			end,
+		},
+		 {
+			Action = function()
+				for _, player in pairs(Players:GetPlayers()) do
+					if player.Character then
+						player.Character.Humanoid.JumpPower = 0
+					end
+				end
+			end,
+			Revert = function()
+				for _, player in pairs(Players:GetPlayers()) do
+					if player.Character then
+						player.Character.Humanoid.JumpPower = 50
+					end
+				end
+			end
+		 }
+	}
+ 
+	local function RoundEffect()
+		if math.random(1,100) >= 55  then -- 45% chance
+			local Effect = Effects[math.random(1,2)]
+			return Effect		
+		end
+	end
+ 
+	local function AwardRewards(player)
+		SessionData[player.UserId].Survivals += 1
+		SessionData[player.UserId].Cash += 10
+	end
+	local TimeLeft = 0
+	task.wait(2) -- We delay, as server starts before players join
+	--I am using State.Value as stringvalue that will directly update on changed to players UI
+	task.spawn(function() -- we create new "Thread" so rest of script can work 
+		while true do
+		if #game.Players:GetPlayers() ~= 0 then -- We check if there are atleast 2 players, changed for your tests
+			if State.Value ~= "Waiting for players" then -- simple check to prevent invoking client value changed event with this
+				State.Value = "Waiting for players"
+			end
+			task.wait(1)
+			for i = 10, 0, -1 do
+				State.Value = "Starting in "..i
+				task.wait(1) -- simple countdown
+			end
+			if #game.Players:GetPlayers() ~= 0 then
+				State.Value = "Generating Map"
+				local PartArray = GenerateMap()
+				task.wait(1)
+				for _, player in pairs(Players:GetPlayers()) do
+					player:SetAttribute("State","Game")
+					player.Character.HumanoidRootPart.CFrame = PartArray[math.random(1,#PartArray)].CFrame + Vector3.new(0,5,0) -- we teleport player to random part
+				end
+ 
+				TimeLeft = 120
+				task.spawn(function()
+					while TimeLeft ~= 0 do
+						TimeLeft -= 1
+							State.Value = tostring(TimeLeft)
+						task.wait(1)
+					end
+				end)
+				local E = RoundEffect()
+				if E then
+					E.Action()
+				end
+				while #GetPlayingPlayers() > 0 and TimeLeft ~= 0 do
+					print(#GetPlayingPlayers())
+					if math.random(1,100) < 10 then
+						task.wait(0.1) -- random quick meteor
+					else
+						task.wait(math.random(1,2))
+					end
+ 
+					task.spawn(function()
+							local CrashLocation = PartArray[math.random(1,#PartArray)] -- we get random part
+							table.remove(PartArray,table.find(PartArray,CrashLocation))
+							CrashAtPos(CrashLocation.Position) -- we crash at random part position
+							CrashLocation:Destroy()
+					end)
+				end
+				task.wait(1)
+				for _, player in GetPlayingPlayers() do
+					player:SetAttribute("State","Lobby")
+					AwardRewards(player)
+					player.Character.HumanoidRootPart.CFrame = workspace.SpawnLocation.CFrame + Vector3.new(math.random(-10,10),5,math.random(-10,10))
+				end
+				if E then
+					E.Revert()
+					E = nil
+				end
+				State.Value = "Game ended"
+				task.wait(3)
+			else
+				State.Value = "Not enough players to start!"
+				task.wait(1)
+			end
+		else
+		print("Waiting")
+		task.wait(1)
+		end	
+ 
+		end
+	end)
